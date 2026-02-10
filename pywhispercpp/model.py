@@ -79,6 +79,8 @@ class Model:
                  openvino_model_path: str = None,
                  openvino_device: str = 'CPU',
                  openvino_cache_dir: str = None,
+                 no_state: bool = False,
+                 gpu_device: int = 0,
                  **params):
         """
         :param model: The name of the model, one of the [AVAILABLE_MODELS](/pywhispercpp/#pywhispercpp.constants.AVAILABLE_MODELS),
@@ -110,6 +112,8 @@ class Model:
         self.openvino_model_path = openvino_model_path
         self.openvino_device = openvino_device
         self.openvino_cache_dir = openvino_cache_dir
+        self.no_state = no_state
+        self.gpu_device = gpu_device
         # init the model
         self._init_model()
 
@@ -156,6 +160,65 @@ class Model:
         res = self._transcribe(audio, n_processors=n_processors)
         end_time = time()
         logger.info(f"Inference time: {end_time - start_time:.3f} s")
+        return res
+
+    def create_state(self):
+        """Create independent inference state sharing this model's weights.
+        Requires the model to be initialized with no_state=True.
+        Each state has its own KV cache and scratch buffers — thread-safe across states.
+        Caller is responsible for freeing via pw.whisper_free_state(state).
+        """
+        return pw.whisper_init_state(self._ctx)
+
+    def transcribe_with_state(self,
+                              media: Union[str, np.ndarray],
+                              state,
+                              **params) -> List[Segment]:
+        """Transcribe using a specific inference state (for shared-weight multi-state usage).
+        Thread-safe across different states sharing the same context.
+        """
+        if type(media) is np.ndarray:
+            audio = media
+        else:
+            if not Path(media).exists():
+                raise FileNotFoundError(media)
+            audio = self._load_audio(media)
+
+        extract_probability = params.pop('extract_probability', False)
+        self._set_params(params)
+
+        start_time = time()
+        pw.whisper_full_with_state(self._ctx, state, self._params, audio, audio.size)
+        end_time = time()
+        logger.info(f"Inference time (with_state): {end_time - start_time:.3f} s")
+
+        n = pw.whisper_full_n_segments_from_state(state)
+        return Model._get_segments_from_state(state, 0, n, extract_probability)
+
+    @staticmethod
+    def _get_segments_from_state(state, start: int, end: int, extract_probability: bool = False) -> List[Segment]:
+        """Read segments from a specific state (parallel to _get_segments for default context)."""
+        n = pw.whisper_full_n_segments_from_state(state)
+        assert end <= n, f"{end} > {n}: `End` index must be less or equal than the total number of segments"
+        res = []
+        for i in range(start, end):
+            t0 = pw.whisper_full_get_segment_t0_from_state(state, i)
+            t1 = pw.whisper_full_get_segment_t1_from_state(state, i)
+            bytes = pw.whisper_full_get_segment_text_from_state(state, i)
+            text = bytes.decode('utf-8', errors='replace')
+
+            avg_prob = np.nan
+            if extract_probability:
+                n_tokens = pw.whisper_full_n_tokens_from_state(state, i)
+                if n_tokens == 1:
+                    avg_prob = pw.whisper_full_get_token_p_from_state(state, i, 0)
+                elif n_tokens > 1:
+                    total_logprob = 0.0
+                    for j in range(n_tokens):
+                        total_logprob += np.log(pw.whisper_full_get_token_p_from_state(state, i, j))
+                    avg_prob = np.exp(total_logprob / n_tokens)
+
+            res.append(Segment(t0, t1, text.strip(), probability=np.float32(avg_prob)))
         return res
 
     @staticmethod
@@ -268,7 +331,12 @@ class Model:
         """
         logger.info("Initializing the model ...")
         with utils.redirect_stderr(to=self.redirect_whispercpp_logs_to):
-            self._ctx = pw.whisper_init_from_file(self.model_path)
+            if self.no_state:
+                ctx_params = pw.whisper_context_default_params()
+                ctx_params.gpu_device = self.gpu_device
+                self._ctx = pw.whisper_init_from_file_no_state(self.model_path, ctx_params)
+            else:
+                self._ctx = pw.whisper_init_from_file(self.model_path)
             if self.use_openvino:
                 pw.whisper_ctx_init_openvino_encoder(self._ctx, self.openvino_model_path, self.openvino_device, self.openvino_cache_dir)
 

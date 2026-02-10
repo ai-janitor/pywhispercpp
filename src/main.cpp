@@ -41,6 +41,10 @@ struct whisper_context_wrapper {
 
 };
 
+struct whisper_state_wrapper {
+    whisper_state* ptr;
+};
+
 
 // struct inside params
 struct greedy{
@@ -63,6 +67,69 @@ struct whisper_context_wrapper whisper_init_from_file_wrapper(const char * path_
     struct whisper_context_wrapper ctw_w;
     ctw_w.ptr = ctx;
     return ctw_w;
+}
+
+// Shared-weight context: load model without allocating inference state
+struct whisper_context_wrapper whisper_init_from_file_no_state_wrapper(const char * path_model, struct whisper_context_params params){
+    struct whisper_context * ctx = whisper_init_from_file_with_params_no_state(path_model, params);
+    struct whisper_context_wrapper ctw_w;
+    ctw_w.ptr = ctx;
+    return ctw_w;
+}
+
+whisper_context_params whisper_context_default_params_wrapper(){
+    return whisper_context_default_params();
+}
+
+// Create independent inference state from existing context (shares weights)
+struct whisper_state_wrapper whisper_init_state_wrapper(struct whisper_context_wrapper * ctx_w){
+    struct whisper_state * state = whisper_init_state(ctx_w->ptr);
+    struct whisper_state_wrapper sw;
+    sw.ptr = state;
+    return sw;
+}
+
+void whisper_free_state_wrapper(struct whisper_state_wrapper * state_w){
+    whisper_free_state(state_w->ptr);
+}
+
+int whisper_full_with_state_wrapper(
+        struct whisper_context_wrapper * ctx_w,
+        struct whisper_state_wrapper * state_w,
+        struct whisper_full_params params,
+        py::array_t<float> samples,
+        int n_samples){
+    py::buffer_info buf = samples.request();
+    float *samples_ptr = static_cast<float *>(buf.ptr);
+
+    py::gil_scoped_release release;
+    return whisper_full_with_state(ctx_w->ptr, state_w->ptr, params, samples_ptr, n_samples);
+}
+
+int whisper_full_n_segments_from_state_wrapper(struct whisper_state_wrapper * state_w){
+    return whisper_full_n_segments_from_state(state_w->ptr);
+}
+
+int64_t whisper_full_get_segment_t0_from_state_wrapper(struct whisper_state_wrapper * state_w, int i_segment){
+    return whisper_full_get_segment_t0_from_state(state_w->ptr, i_segment);
+}
+
+int64_t whisper_full_get_segment_t1_from_state_wrapper(struct whisper_state_wrapper * state_w, int i_segment){
+    return whisper_full_get_segment_t1_from_state(state_w->ptr, i_segment);
+}
+
+const py::bytes whisper_full_get_segment_text_from_state_wrapper(struct whisper_state_wrapper * state_w, int i_segment){
+    const char * c_array = whisper_full_get_segment_text_from_state(state_w->ptr, i_segment);
+    size_t length = strlen(c_array);
+    return py::bytes(c_array, length);
+}
+
+int whisper_full_n_tokens_from_state_wrapper(struct whisper_state_wrapper * state_w, int i_segment){
+    return whisper_full_n_tokens_from_state(state_w->ptr, i_segment);
+}
+
+float whisper_full_get_token_p_from_state_wrapper(struct whisper_state_wrapper * state_w, int i_segment, int i_token){
+    return whisper_full_get_token_p_from_state(state_w->ptr, i_segment, i_token);
 }
 
 struct whisper_context_wrapper whisper_init_from_buffer_wrapper(void * buffer, size_t buffer_size){
@@ -429,6 +496,12 @@ PYBIND11_MODULE(_pywhispercpp, m) {
     m.attr("WHISPER_CHUNK_SIZE") = WHISPER_CHUNK_SIZE;
 
     py::class_<whisper_context_wrapper>(m, "whisper_context");
+    py::class_<whisper_state_wrapper>(m, "whisper_state");
+    py::class_<whisper_context_params>(m, "whisper_context_params")
+        .def(py::init<>())
+        .def_readwrite("use_gpu", &whisper_context_params::use_gpu)
+        .def_readwrite("flash_attn", &whisper_context_params::flash_attn)
+        .def_readwrite("gpu_device", &whisper_context_params::gpu_device);
     py::class_<whisper_token>(m, "whisper_token")
             .def(py::init<>());
     py::class_<whisper_token_data>(m,"whisper_token_data")
@@ -458,6 +531,24 @@ PYBIND11_MODULE(_pywhispercpp, m) {
 
 
     m.def("whisper_free", &whisper_free_wrapper, "Frees all memory allocated by the model.");
+
+    // Shared-weight context API
+    m.def("whisper_context_default_params", &whisper_context_default_params_wrapper, "Get default context params (use_gpu, flash_attn, gpu_device)");
+    DEF_RELEASE_GIL("whisper_init_from_file_no_state", &whisper_init_from_file_no_state_wrapper,
+                     "Load model weights without allocating inference state.\n"
+                     "Use whisper_init_state() to create independent states that share these weights.");
+    DEF_RELEASE_GIL("whisper_init_state", &whisper_init_state_wrapper,
+                     "Create independent inference state from existing context.\n"
+                     "Multiple states can share the same model weights.");
+    m.def("whisper_free_state", &whisper_free_state_wrapper, "Free an inference state without freeing model weights.");
+    m.def("whisper_full_with_state", &whisper_full_with_state_wrapper,
+          "Run full inference on a specific state. Thread-safe across different states sharing the same context.");
+    m.def("whisper_full_n_segments_from_state", &whisper_full_n_segments_from_state_wrapper, "Get segment count from a specific state.");
+    m.def("whisper_full_get_segment_t0_from_state", &whisper_full_get_segment_t0_from_state_wrapper, "Get segment start time from a specific state.");
+    m.def("whisper_full_get_segment_t1_from_state", &whisper_full_get_segment_t1_from_state_wrapper, "Get segment end time from a specific state.");
+    m.def("whisper_full_get_segment_text_from_state", &whisper_full_get_segment_text_from_state_wrapper, "Get segment text from a specific state.");
+    m.def("whisper_full_n_tokens_from_state", &whisper_full_n_tokens_from_state_wrapper, "Get token count from a specific state.");
+    m.def("whisper_full_get_token_p_from_state", &whisper_full_get_token_p_from_state_wrapper, "Get token probability from a specific state.");
 
     m.def("whisper_pcm_to_mel", &whisper_pcm_to_mel_wrapper, "Convert RAW PCM audio to log mel spectrogram.\n"
                                                              "The resulting spectrogram is stored inside the provided whisper context.\n"
