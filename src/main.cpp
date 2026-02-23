@@ -252,6 +252,15 @@ void whisper_reset_timings_wrapper(struct whisper_context_wrapper * ctx_w){
 
 py::dict whisper_get_timings_wrapper(struct whisper_context_wrapper * ctx_w){
     struct whisper_timings * timings = whisper_get_timings(ctx_w->ptr);
+    if (!timings) {
+        return py::dict(
+            "sample_ms"_a = 0.0,
+            "encode_ms"_a = 0.0,
+            "decode_ms"_a = 0.0,
+            "batchd_ms"_a = 0.0,
+            "prompt_ms"_a = 0.0
+        );
+    }
     py::dict d(
         "sample_ms"_a = timings->sample_ms,
         "encode_ms"_a = timings->encode_ms,
