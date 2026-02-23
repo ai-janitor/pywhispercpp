@@ -302,6 +302,23 @@ class Model:
         """
         pw.whisper_print_timings(self._ctx)
 
+    def get_timings(self) -> dict:
+        """
+        Get timing breakdown from last inference.
+
+        Returns dict with keys:
+            - sample_ms: time to prepare audio samples
+            - encode_ms: time for encoder pass
+            - decode_ms: time for decoder pass(es)
+            - batchd_ms: batch decoding time (if applicable)
+            - prompt_ms: prompt processing time
+
+        Direct binding to whisper.cpp/whisper_get_timings
+
+        :return: dict with timing metrics in milliseconds
+        """
+        return pw.whisper_get_timings(self._ctx)
+
     @staticmethod
     def system_info() -> None:
         """
