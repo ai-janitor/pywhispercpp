@@ -320,6 +320,11 @@ class Model:
         return pw.whisper_get_timings(self._ctx)
 
     @staticmethod
+    def get_timings_from_state(state) -> dict:
+        """Get timing breakdown from a specific state (for no_state/shared-weight mode)."""
+        return pw.whisper_get_timings_from_state(state)
+
+    @staticmethod
     def system_info() -> None:
         """
         Direct binding to whisper.cpp/whisper_print_system_info

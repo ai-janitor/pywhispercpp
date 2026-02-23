@@ -271,6 +271,27 @@ py::dict whisper_get_timings_wrapper(struct whisper_context_wrapper * ctx_w){
     return d;
 }
 
+py::dict whisper_get_timings_from_state_wrapper(struct whisper_state_wrapper * state_w){
+    struct whisper_timings * timings = whisper_get_timings_from_state(state_w->ptr);
+    if (!timings) {
+        return py::dict(
+            "sample_ms"_a = 0.0,
+            "encode_ms"_a = 0.0,
+            "decode_ms"_a = 0.0,
+            "batchd_ms"_a = 0.0,
+            "prompt_ms"_a = 0.0
+        );
+    }
+    py::dict d(
+        "sample_ms"_a = timings->sample_ms,
+        "encode_ms"_a = timings->encode_ms,
+        "decode_ms"_a = timings->decode_ms,
+        "batchd_ms"_a = timings->batchd_ms,
+        "prompt_ms"_a = timings->prompt_ms
+    );
+    return d;
+}
+
 int whisper_encode_wrapper(
         struct whisper_context_wrapper * ctx,
         int   offset,
@@ -645,6 +666,8 @@ PYBIND11_MODULE(_pywhispercpp, m) {
     m.def("whisper_reset_timings", &whisper_reset_timings_wrapper);
     m.def("whisper_get_timings", &whisper_get_timings_wrapper,
           "Get timing breakdown: {sample_ms, encode_ms, decode_ms, batchd_ms, prompt_ms}");
+    m.def("whisper_get_timings_from_state", &whisper_get_timings_from_state_wrapper,
+          "Get timing breakdown from a specific state (for no_state/shared-weight mode)");
 
     m.def("whisper_print_system_info", &whisper_print_system_info);
 
